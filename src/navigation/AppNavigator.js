@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
@@ -41,7 +41,14 @@ function Tabs() {
 }
 
 export default function AppNavigator() {
-  const { auth } = useAuth();
+  const { auth, signIn } = useAuth();
+
+  useEffect(() => {
+    // Esto asegura que el componente se vuelve a renderizar si el estado cambia
+    if (auth.token) {
+      console.log('Usuario autenticado, redirigiendo...');
+    }
+  }, [auth]);
 
   return (
     <NavigationContainer>
@@ -59,7 +66,6 @@ export default function AppNavigator() {
               component={Tabs}
               options={{ headerShown: false }}
             />
-            {/* Modal para registrar desde botón + */}
             <Stack.Screen
               name="Register"
               component={RegisterScreen}
