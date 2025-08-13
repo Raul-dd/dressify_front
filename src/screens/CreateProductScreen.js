@@ -11,41 +11,61 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 
 // ====== CATEGORÍAS Y SUBCATEGORÍAS FIJAS (ROPA) ======
-const CATEGORIES = [
-  { id: 'tops',        name: 'Tops' },
-  { id: 'bottoms',     name: 'Pantalones' },
-  { id: 'dresses',     name: 'Vestidos' },
-  { id: 'shoes',       name: 'Calzado' },
-  { id: 'accessories', name: 'Accesorios' },
+// Categorías fijas
+export const CATEGORIES = [
+  { id: 'mujer',   name: 'Mujer' },
+  { id: 'hombre',  name: 'Hombre' },
+  { id: 'kids',    name: 'Kids' },
+  { id: 'babies',  name: 'Bebés' },
+  { id: 'otros',   name: 'Otros' },
 ];
 
-const SUBCATS = {
-  tops: [
-    { id: 'tshirts',  name: 'Playeras' },
-    { id: 'shirts',   name: 'Camisas' },
-    { id: 'sweaters', name: 'Suéteres' },
+// Subcategorías fijas por categoría
+export const SUBCATS = {
+  mujer: [
+    { id: 'blusas',     name: 'Blusas' },
+    { id: 'sueteres',   name: 'Suéteres' },
+    { id: 'jeans',      name: 'Jeans' },
+    { id: 'vestidos',   name: 'Vestidos' },
+    { id: 'abrigos',    name: 'Abrigos' },
+    { id: 'accesorios', name: 'Accesorios' },
   ],
-  bottoms: [
-    { id: 'jeans',     name: 'Jeans' },
-    { id: 'trousers',  name: 'Pantalón de vestir' },
-    { id: 'shorts',    name: 'Shorts' },
+  hombre: [
+    { id: 'playeras',   name: 'Playeras' },
+    { id: 'camisas',    name: 'Camisas' },
+    { id: 'sueteres',   name: 'Suéteres' },
+    { id: 'jeans',      name: 'Jeans' },
+    { id: 'pantalones', name: 'Pantalones' },
+    { id: 'abrigos',    name: 'Abrigos' },
+    { id: 'accesorios', name: 'Accesorios' },
   ],
-  dresses: [
-    { id: 'casual', name: 'Casuales' },
-    { id: 'party',  name: 'Fiesta' },
-    { id: 'formal', name: 'Formales' },
+  kids: [
+    { id: 'playeras',   name: 'Playeras' },
+    { id: 'camisas',    name: 'Camisas' },
+    { id: 'sudaderas',  name: 'Sudaderas' },
+    { id: 'vestidos',   name: 'Vestidos' },
+    { id: 'jeans',      name: 'Jeans' },
+    { id: 'pantalones', name: 'Pantalones' },
+    { id: 'accesorios', name: 'Accesorios' },
   ],
-  shoes: [
-    { id: 'sneakers', name: 'Tenis' },
-    { id: 'formal',   name: 'Zapatos formales' },
-    { id: 'sandals',  name: 'Sandalias' },
+  babies: [
+    { id: 'mamelucos',  name: 'Mamelucos' },
+    { id: 'bodies',     name: 'Bodies' },
+    { id: 'conjuntos',  name: 'Conjuntos' },
+    { id: 'pijamas',    name: 'Pijamas' },
+    { id: 'gorritos',   name: 'Gorritos' },
+    { id: 'accesorios', name: 'Accesorios' },
   ],
-  accessories: [
-    { id: 'bags',  name: 'Bolsas' },
-    { id: 'belts', name: 'Cinturones' },
-    { id: 'hats',  name: 'Sombreros' },
+  otros: [
+    { id: 'gorras',        name: 'Gorras' },
+    { id: 'calcetines',    name: 'Calcetines' },
+    { id: 'ropa_interior', name: 'Ropa interior' },
+    { id: 'deportes',      name: 'Deportes' },
+    { id: 'hogar',         name: 'Hogar' },
+    { id: 'varios',        name: 'Varios' },
   ],
 };
+
 
 export default function CreateProductScreen() {
   const { token } = useAuth();
