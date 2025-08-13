@@ -1,71 +1,53 @@
 // src/navigation/AppNavigator.js
 import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
-import HomeScreen from '../screens/HomeScreen';
-import UsersScreen from '../screens/UsersScreen';
-import ProductsScreen from '../screens/ProductsScreen';
-import ProfileScreen from '../screens/ProfileScreen';
-import EditAccountScreen from '../screens/EditAccountScreen';
-import EditProductScreen from '../screens/EditProductScreen';
-import ChangePasswordScreen from '../screens/ChangePasswordScreen';
-import CreateProductScreen from '../screens/CreateProductScreen';
+
+import AdminNavigator from './roles/AdminNavigator';
+import ConsultorNavigator from './roles/ConsultorNavigator';
+import VendedorNavigator from './roles/VendedorNavigator';
 
 const Stack = createNativeStackNavigator();
-const Tab = createBottomTabNavigator();
 
-function Tabs() {
+const normalizeRole = (r) => {
+  if (!r) return '';
+  const x = String(r).toLowerCase().trim();
+  if (x === 'admin' || x === 'administrador') return 'admin';
+  if (x === 'consultor') return 'consultor';
+  if (x === 'vendedor') return 'vendedor';
+  return x;
+};
+
+function AuthStack() {
   return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarLabelStyle: { fontSize: 11 },
-        tabBarIcon: ({ color, size }) => {
-          const map = {
-            Inicio: 'home',
-            Usuarios: 'people',
-            Productos: 'cube',
-            Perfil: 'person-circle',
-          };
-          return <Ionicons name={map[route.name]} size={size} color={color} />;
-        },
-      })}
-    >
-      <Tab.Screen name="Inicio" component={HomeScreen} />
-      <Tab.Screen name="Usuarios" component={UsersScreen} />
-      <Tab.Screen name="Productos" component={ProductsScreen} />
-      <Tab.Screen name="Perfil" component={ProfileScreen} />
-    </Tab.Navigator>
+    <Stack.Navigator>
+      <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Register" component={RegisterScreen} options={{ title: 'Registrar Usuario' }} />
+    </Stack.Navigator>
   );
 }
 
 export default function AppNavigator() {
-  // ⬇️ AHORA sí: token y loading vienen DIRECTO del contexto
-  const { token } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return null;
+
+  const role = normalizeRole(user?.role);
 
   return (
-    <Stack.Navigator>
-      {!token ? (
-        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+    <NavigationContainer>
+      {!user ? (
+        <AuthStack />
+      ) : role === 'admin' ? (
+        <AdminNavigator />
+      ) : role === 'consultor' ? (
+        <ConsultorNavigator />
       ) : (
-        <>
-          <Stack.Screen name="Main" component={Tabs} options={{ headerShown: false }} />
-          <Stack.Screen name="Register" component={RegisterScreen} options={{ title: 'Registrar Usuario' }} />
-          <Stack.Screen name="EditAccount" component={EditAccountScreen} options={{ title: 'Editar cuenta' }} />
-          <Stack.Screen name="EditProduct" component={EditProductScreen} options={{ title:'Editar producto' }} />
-          <Stack.Screen
-            name="ChangePassword"
-            component={ChangePasswordScreen}
-            options={{ title: 'Cambiar contraseña' }}
-          />
-          <Stack.Screen name="CreateProduct" component={CreateProductScreen} options={{ headerShown: false }} />
-        </>
+        <VendedorNavigator />
       )}
-    </Stack.Navigator>
+    </NavigationContainer>
   );
 }

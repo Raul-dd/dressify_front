@@ -1,3 +1,4 @@
+// src/screens/LoginScreen.js
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, StyleSheet, Image } from 'react-native';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +11,7 @@ export default function LoginScreen() {
   const onLogin = async () => {
     try {
       await signIn(email.trim(), password);
+      // No navegues manualmente: AppNavigator cambiará al stack según el rol
     } catch (err) {
       console.log(err?.response?.data || err.message);
       const msg = err?.response?.data?.message || 'Ocurrió un error al iniciar sesión';
@@ -20,7 +22,7 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <Image source={require('../../assets/logo.png')} style={styles.logo} />
-      
+
       <Text style={styles.label}>Gmail</Text>
       <TextInput
         placeholder="Gmail"
@@ -31,6 +33,7 @@ export default function LoginScreen() {
         autoCapitalize="none"
         keyboardType="email-address"
       />
+
       <Text style={styles.label}>Password</Text>
       <TextInput
         placeholder="Password"
@@ -40,6 +43,7 @@ export default function LoginScreen() {
         style={styles.input}
         placeholderTextColor="#666"
       />
+
       <TouchableOpacity style={styles.button} onPress={onLogin}>
         <Text style={styles.buttonText}>Login</Text>
       </TouchableOpacity>
