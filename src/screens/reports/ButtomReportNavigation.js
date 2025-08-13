@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 // Importa tus pantallas
 import HomeReportScreen from './HomeReportScreen';
@@ -19,11 +20,11 @@ export default function ButtomReportNavigation() {
   const [currentScreen, setCurrentScreen] = useState('home');
   
   const menuItems = [
-    { id: 'home', label: 'Home', icon: HomeIcon },
-    { id: 'sales', label: 'Sales', icon: SalesIcon },
-    { id: 'users', label: 'Users', icon: UsersIcon },
-    { id: 'products', label: 'Products', icon: ProductsIcon },
-    { id: 'profile', label: 'Profile', icon: ProfileIcon },
+    { id: 'home', label: 'Home', icon: 'home' },
+    { id: 'sales', label: 'Sales', icon: 'stats-chart' },
+    { id: 'users', label: 'Users', icon: 'people' },
+    { id: 'products', label: 'Products', icon: 'cube' },
+    { id: 'profile', label: 'Profile', icon: 'person-circle' },
   ];
 
   const renderScreen = () => {
@@ -45,7 +46,6 @@ export default function ButtomReportNavigation() {
       
       <View style={styles.navigation}>
         {menuItems.map((item) => {
-          const Icon = item.icon;
           const isActive = currentScreen === item.id;
           
           return (
@@ -59,7 +59,11 @@ export default function ButtomReportNavigation() {
                 isActive && styles.activeNavButtonContainer
               ]}>
                 <View style={styles.iconWrapper}>
-                  <Icon />
+                  <Ionicons
+                    name={item.icon}
+                    size={24}
+                    color={isActive ? 'gray' : 'gray'}
+                  />
                 </View>
                 <Text style={styles.navText}>{item.label}</Text>
               </View>
