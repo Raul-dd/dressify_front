@@ -1,55 +1,58 @@
+// context/AuthContext.js
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import API, { setAuthToken, loadPersistedToken } from '../api/axios';
+import API, { setAuthToken } from '../api/axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [auth, setAuth] = useState({ token: null, user: null, loading: true });
+  const [token, setToken] = useState(null);
+  const [user,  setUser]  = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const token = await loadPersistedToken(); // Intenta cargar el token
-      const userStr = await AsyncStorage.getItem('@user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      setAuth({ token, user, loading: false });
+      try {
+        const [t, u] = await Promise.all([
+          AsyncStorage.getItem('@token'),
+          AsyncStorage.getItem('@user'),
+        ]);
+        if (t) {
+          setToken(t);
+          await setAuthToken(t); // pone Authorization en axios
+        }
+        if (u) setUser(JSON.parse(u));
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
-  // src/context/AuthContext.js
-  // src/context/AuthContext.js
   const signIn = async (email, password) => {
-    try {
-      const { data } = await API.post('/login', { email, password });
+    const { data } = await API.post('/login', { email, password });
+    const t = data?.token;
+    const u = data?.user;
+    if (!t || !u) throw new Error('Respuesta inválida del servidor');
 
-      // Obtenemos el token desde la respuesta de la API
-      const token = data.token;  // El token debe venir del backend
-      const user = data.user;
+    await AsyncStorage.setItem('@token', t);
+    await AsyncStorage.setItem('@user', JSON.stringify(u));
+    await setAuthToken(t);
 
-      // Guardamos el token y el usuario en AsyncStorage
-      await AsyncStorage.setItem('@token', token);
-      await AsyncStorage.setItem('@user', JSON.stringify(user));
-
-      // Configuramos el token para futuras peticiones con axios
-      await setAuthToken(token);
-
-      // Actualizamos el estado con el token y el usuario
-      setAuth({ token, user, loading: false });
-    } catch (err) {
-      console.log(err?.response?.data || err.message);
-      throw new Error('Credenciales inválidas');
-    }
+    setToken(t);
+    setUser(u);
+    setLoading(false);
+    return u;
   };
-
 
   const signOut = async () => {
     await setAuthToken(null);
-    await AsyncStorage.removeItem('@user');
-    setAuth({ token: null, user: null, loading: false });
+    await AsyncStorage.multiRemove(['@token', '@user']);
+    setToken(null);
+    setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ auth, signIn, signOut, setAuth }}>
+    <AuthContext.Provider value={{ token, user, loading, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,11 +1,14 @@
+// screens/ProfileScreen.js
 import React from 'react';
 import { View, Text, TextInput, StyleSheet, Image, TouchableOpacity, Alert } from 'react-native';
 import TopBar from '../components/TopBar';
 import { useAuth } from '../context/AuthContext';
+import { useNavigation } from '@react-navigation/native';
 
 export default function ProfileScreen() {
-  const { auth, signOut } = useAuth();
-  const u = auth?.user || {};
+  const { user, signOut } = useAuth();  // <-- antes: { auth, signOut }
+  const navigation = useNavigation();  
+  const u = user || {};
 
   return (
     <View style={{ flex:1, backgroundColor:'#fff' }}>
@@ -13,13 +16,16 @@ export default function ProfileScreen() {
       <View style={styles.container}>
         <Image source={{ uri: 'https://i.pravatar.cc/150?img=3' }} style={styles.avatar} />
         <Text style={styles.label}>Name</Text>
-        <TextInput value={u?.name || ''} editable={false} style={styles.input} />
+        <TextInput value={u.name || ''} editable={false} style={styles.input} />
         <Text style={styles.label}>Email</Text>
-        <TextInput value={u?.email || ''} editable={false} style={styles.input} />
+        <TextInput value={u.email || ''} editable={false} style={styles.input} />
         <Text style={styles.label}>Role</Text>
-        <TextInput value={u?.role || ''} editable={false} style={styles.input} />
+        <TextInput value={u.role || ''} editable={false} style={styles.input} />
 
-        <TouchableOpacity style={styles.link} onPress={() => Alert.alert('Info','Implementa aquí tu cambio de contraseña con /accounts/{id}/change-password')}>
+        <TouchableOpacity
+          style={styles.link}
+          onPress={() => navigation.navigate('ChangePassword')}
+        >
           <Text style={{ color:'#333' }}>Cambiar contraseña</Text>
         </TouchableOpacity>
 
