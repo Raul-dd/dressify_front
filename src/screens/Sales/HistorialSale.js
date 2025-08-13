@@ -192,13 +192,14 @@ export default function HistorialSale() {
     if (!saleToCancel) return;
     try {
       await API.put(`/sales/${toId(saleToCancel._id)}`, { status: "cancelled" });
+      Alert.alert("Venta cancelada", "La venta ha sido marcada como cancelada.");
       setShowCancelModal(false);
       setSaleToCancel(null);
       await fetchPage(1, true);
     } catch (e) {
       Alert.alert("Error", e?.response?.data?.message || "No se pudo cancelar la venta");
     }
-  };
+};
 
   const renderSale = ({ item }) => {
     const lines = normalizeDetails(item.details);

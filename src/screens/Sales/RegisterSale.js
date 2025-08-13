@@ -1,220 +1,431 @@
-// src/screens/Sales/RegisterSale.js
+// src/screens/Sales/EditSale.js
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View, Text, StyleSheet, Image, TouchableOpacity, TextInput,
-  FlatList, Modal, Pressable, ActivityIndicator, Alert
+  FlatList, Modal, ActivityIndicator, Alert
 } from "react-native";
-//import { useNavigation } from "@react-navigation/native";
-import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import axios from "axios";
 import Constants from "expo-constants";
-import { useNavigation } from '@react-navigation/native';
+import { MaterialIcons } from "@expo/vector-icons";
+import { useRoute, useNavigation } from "@react-navigation/native";
 
-// --- API base desde app.json (ya incluye /api) ---
+// === API base desde app.json (ya incluye /api) ===
 const RAW_BASE =
   (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.apiBaseUrl) ||
   (Constants.manifest && Constants.manifest.extra && Constants.manifest.extra.apiBaseUrl) ||
   "";
 const API_BASE = String(RAW_BASE).replace(/\/+$/, "");
 const API = axios.create({
-  baseURL: API_BASE,            // ej: http://192.168.1.72:8000/api
+  baseURL: API_BASE,
   timeout: 15000,
   headers: { Accept: "application/json" },
 });
 
-// --- helpers ---
+// === helpers ===
+const toId = (raw) => {
+  if (!raw) return "";
+  if (typeof raw === "string") return raw;
+  if (raw.$oid) return raw.$oid;
+  if (raw.oid) return raw.oid;
+  return String(raw);
+};
+const normalizeDetails = (d) => {
+  if (!d) return [];
+  if (Array.isArray(d)) return d;
+  if (typeof d === "string") { try { return JSON.parse(d); } catch { return []; } }
+  return [];
+};
+
+// Métodos de pago (solo UI)
 const METHODS = [
   { id: "cash",     label: "Efectivo" },
   { id: "card",     label: "Tarjeta" },
   { id: "transfer", label: "Transferencia" },
 ];
 
-const toId = (raw) => (typeof raw === "string" ? raw : raw?.$oid || raw?.oid || String(raw || ""));
+// === helpers tiempo edición ===
+const EDIT_WINDOW_MIN = 10;
 
-export default function RegisterSale() {
+const parseDate = (v) => {
+  if (!v) return null;
+  const s = (typeof v === "string")
+    ? v
+    : (v?.date || v?.$date || v?.iso || v);
+  const d = new Date(s);
+  return isNaN(+d) ? null : d;
+};
+
+const secondsLeftFrom = (createdAt) => {
+  if (!createdAt) return 0;
+  const deadline = new Date(createdAt.getTime() + EDIT_WINDOW_MIN * 60 * 1000);
+  return Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000));
+};
+
+export default function EditSale() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const { saleId } = route.params || {};
 
+  // estado loading
   const [loading, setLoading] = useState(true);
 
-  // products
+  // datos base
+  const [sale, setSale] = useState(null);
   const [products, setProducts] = useState([]);
-  const [prodSearch, setProdSearch] = useState("");
+
+  // selección de UI
   const [showProducts, setShowProducts] = useState(false);
+  const [prodSearch, setProdSearch] = useState("");
   const [product, setProduct] = useState(null);
 
-  // qty
   const [qty, setQty] = useState(1);
 
-  // payment
   const [showMethods, setShowMethods] = useState(false);
   const [method, setMethod] = useState(null);
 
-  // ===== cargar productos =====
+  // ventana de edición
+  const [locked, setLocked] = useState(false);
+  const [lockReason, setLockReason] = useState(""); // "time" | "cancelled" | ""
+  const [secsLeft, setSecsLeft] = useState(0); // cuenta regresiva
+
+  // cancelar venta
+  const [showCancelModal, setShowCancelModal] = useState(false);
+
+  // ----- cargar productos (devuelve la lista también) -----
   const loadProducts = useCallback(async () => {
-    try {
-      const res = await API.get(`/products`);
-      const rows = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
-
-      // normaliza y elimina duplicados
-      const seen = new Set();
-      const list = [];
-      rows.forEach((p) => {
-        const id = String(p?._id ?? p?.id ?? "");
-        if (!id || seen.has(id)) return;
-        seen.add(id);
-        list.push({
-          _id: id,
-          name: String(p?.name ?? "Unnamed"),
-          price: Number(p?.price ?? 0),
-          sale_price: Number(p?.sale_price ?? 0),
-        });
-      });
-
-      setProducts(list);
-    } catch (e) {
-      console.log("loadProducts error:", e?.message);
-      setProducts([]);
-    } finally {
-      setLoading(false);
-    }
+    const res = await API.get(`/products/names`);
+    const rows = Array.isArray(res.data) ? res.data : (res.data && res.data.data) ? res.data.data : [];
+    const mapped = rows.map((p) => ({
+      _id: toId(p.id),
+      name: String(p.name || "Unnamed"),
+      price: Number(p.price ?? 0),
+      sale_price: Number(p.sale_price ?? 0)
+    }));
+    setProducts(mapped);
+    return mapped; // <- devolver para usar inmediatamente
   }, []);
 
-  useEffect(() => { loadProducts(); }, [loadProducts]);
+  // Obtiene un saleId si no te pasaron uno
+  const fetchAnySaleId = useCallback(async () => {
+    const res = await API.get(`/sales?per_page=1&page=1`);
+    const list = Array.isArray(res.data) ? res.data : (res.data && res.data.data) ? res.data.data : [];
+    return list.length ? toId(list[0]._id) : null;
+  }, []);
 
-  // ===== totales =====
-  const unitPrice = useMemo(() => {
-    if (!product) return 0;
-    const s = Number(product.sale_price || 0);
-    const p = Number(product.price || 0);
-    return s > 0 ? s : p;
-  }, [product]);
+  // ----- cargar venta + precargar campos (devuelve product_id) -----
+  const loadSale = useCallback(async (id) => {
+    if (!id) return null;
+    const res = await API.get(`/sales/${id}`);
+    const doc = res.data && res.data.data ? res.data.data : res.data;
+    setSale(doc);
 
+    // estado cancelado bloquea todo
+    const cancelled = String(doc.status || "").toLowerCase() === "cancelled" || String(doc.status || "").toLowerCase() === "canceled";
+
+    // ⏱️ ventana de edición
+    const createdAt =
+      parseDate(doc.created_at) ||
+      parseDate(doc.createdAt) ||
+      parseDate(doc.created_at_iso) ||
+      parseDate(doc.createdAtIso);
+
+    const left = secondsLeftFrom(createdAt);
+    setSecsLeft(left);
+
+    if (cancelled) {
+      setLocked(true);
+      setLockReason("cancelled");
+    } else if (left === 0) {
+      setLocked(true);
+      setLockReason("time");
+    } else {
+      setLocked(false);
+      setLockReason("");
+    }
+
+    // método y cantidad
+    const det = normalizeDetails(doc.details)[0] || {};
+    const m = METHODS.find((x) => x.id === doc.payment_method) || null;
+    setMethod(m);
+    setQty(Number(det.quantity || 1));
+
+    return String(det.product_id || "");
+  }, []);
+
+  // carga inicial
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        const id = saleId || (await fetchAnySaleId());
+        const [prodList, pid] = await Promise.all([
+          loadProducts(),
+          (async () => await loadSale(id))(),
+        ]);
+        if (pid) {
+          const found = prodList.find((p) => p._id === pid);
+          if (found) setProduct(found);
+        }
+      } catch (e) {
+        console.log("load error:", e?.response?.data || e?.message);
+        Alert.alert("Error", "No se pudo cargar la venta/productos.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [fetchAnySaleId, loadProducts, loadSale, saleId]);
+
+  // si cambian products después, intenta enganchar el product_id
+  useEffect(() => {
+    if (!sale || product || !products.length) return;
+    const det = normalizeDetails(sale.details)[0] || {};
+    const pid = String(det.product_id || "");
+    const found = products.find((p) => p._id === pid);
+    if (found) setProduct(found);
+  }, [products, sale, product]);
+
+  // cuenta regresiva (solo si no está cancelado y hay tiempo > 0)
+  useEffect(() => {
+    if (!sale) return;
+    if (lockReason === "cancelled") return;
+    if (locked || secsLeft === 0) return;
+    const int = setInterval(() => {
+      setSecsLeft((s) => {
+        const ns = Math.max(0, s - 1);
+        if (ns === 0) {
+          setLocked(true);
+          setLockReason("time");
+        }
+        return ns;
+      });
+    }, 1000);
+    return () => clearInterval(int);
+  }, [sale, locked, secsLeft, lockReason]);
+
+  // ----- totales -----
+  const unitPrice = useMemo(
+    () => Number((product && (product.sale_price || product.price)) || 0),
+    [product]
+  );
   const subtotal = useMemo(() => +(unitPrice * qty).toFixed(2), [unitPrice, qty]);
-  const tax      = useMemo(() => +(subtotal * 0.16).toFixed(2), [subtotal]); // 16%
-  const total    = useMemo(() => +(subtotal + tax).toFixed(2), [subtotal, tax]);
+  const tax = useMemo(() => +(subtotal * 0.16).toFixed(2), [subtotal]);
+  const total = useMemo(() => +(subtotal + tax).toFixed(2), [subtotal, tax]);
 
-  // ===== listas en modales =====
+  // ----- listados en modal -----
   const listForModal = useMemo(() => {
-    const base = products;
     const q = prodSearch.trim().toLowerCase();
-    return q ? base.filter(p => (p.name || "").toLowerCase().includes(q)) : base;
+    return q ? products.filter((p) => (p.name || "").toLowerCase().includes(q)) : products;
   }, [products, prodSearch]);
 
-  const chooseProduct = (p) => { setProduct(p || null); setShowProducts(false); };
-  const chooseMethod  = (m) => { setMethod(m); setShowMethods(false); };
+  const chooseProduct = (p) => { if (!locked) { setProduct(p); setShowProducts(false); } };
+  const chooseMethod  = (m) => { if (!locked) { setMethod(m); setShowMethods(false); } };
 
-  // ===== acciones =====
-  const inc = () => setQty(q => Math.min(9999, q + 1));
-  const dec = () => setQty(q => Math.max(1, q - 1));
+  // ----- inputs cantidad -----
+  const inc = () => !locked && setQty((q) => Math.min(9999, q + 1));
+  const dec = () => !locked && setQty((q) => Math.max(1, q - 1));
   const onChangeQty = (v) => {
-    const n = Number(v.replace(/[^\d]/g, ""));
-    setQty(isNaN(n) || n <= 0 ? 1 : n);
+    if (locked) return;
+    const n = Number((v || "").replace(/[^\d]/g, ""));
+    setQty(!n || n <= 0 ? 1 : n);
   };
 
-  const onConfirm = async () => {
+  const mmss = (s) => {
+    const m = Math.floor(s / 60).toString().padStart(2, "0");
+    const ss = (s % 60).toString().padStart(2, "0");
+    return `${m}:${ss}`;
+  };
+
+  // ----- guardar -----
+  const onSave = async () => {
+    if (!sale) return;
+    if (locked) {
+      return Alert.alert(
+        lockReason === "cancelled" ? "Venta cancelada" : "Bloqueado",
+        lockReason === "cancelled"
+          ? "Esta venta está cancelada y no se puede editar."
+          : `Solo puedes editar durante ${EDIT_WINDOW_MIN} minutos después de crear la venta.`
+      );
+    }
     if (!product) return Alert.alert("Falta", "Selecciona un producto.");
-    if (!method)  return Alert.alert("Falta", "Selecciona un método de pago.");
+    if (!method) return Alert.alert("Falta", "Selecciona un método de pago.");
 
     try {
       setLoading(true);
-      await API.post(`/sales`, {
-        // seller_id: null, // si luego tienes usuario, lo mandas aquí
+      await API.put(`/sales/${toId(sale._id)}`, {
         payment_method: method.id,
         details: [{ product_id: product._id, quantity: qty }],
       });
-      Alert.alert("Éxito", "Venta creada correctamente.");
-      setProduct(null); setQty(1); setMethod(null);
-      // Ajusta por el nombre de tu ruta: "HistorialSale" o "Ventas"
-      navigation.navigate("HistorialSale");
+      Alert.alert("Guardado", "Venta actualizada.");
+      if (navigation && navigation.canGoBack && navigation.canGoBack()) navigation.goBack();
     } catch (e) {
-      console.log("create sale error:", e?.response?.data || e?.message);
-      Alert.alert("Error", e?.response?.data?.message || "No se pudo crear la venta");
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        "No se pudo actualizar la venta";
+
+      if (e?.response?.status === 403 || e?.response?.status === 422) {
+        Alert.alert(
+          "No permitido",
+          msg.toLowerCase().includes("tiempo") || msg.toLowerCase().includes("time")
+            ? msg
+            : `La edición está limitada a ${EDIT_WINDOW_MIN} minutos después de la venta.`
+        );
+        setLocked(true);
+        setLockReason("time");
+      } else {
+        Alert.alert("Error", msg);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const onCancel = () => {
-    setProduct(null); setQty(1); setMethod(null);
-    navigation.goBack();
+  // ----- cancelar venta (integrado con modal) -----
+  const confirmCancel = async () => {
+    if (!sale) return;
+    try {
+      setLoading(true);
+      await API.put(`/sales/${toId(sale._id)}`, { status: "cancelled" });
+      Alert.alert("Venta cancelada", "La venta ha sido marcada como cancelada.");
+      setShowCancelModal(false);
+      // Reflejar en UI y bloquear
+      setSale((prev) => ({ ...(prev || {}), status: "cancelled" }));
+      setLocked(true);
+      setLockReason("cancelled");
+    } catch (e) {
+      Alert.alert("Error", e?.response?.data?.message || "No se pudo cancelar la venta");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) {
-    return <View style={styles.center}><ActivityIndicator /></View>;
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator />
+      </View>
+    );
   }
+
+  const isCancelled =
+    String(sale?.status || "").toLowerCase() === "cancelled" ||
+    String(sale?.status || "").toLowerCase() === "canceled";
 
   return (
     <View style={styles.screen}>
       {/* AppBar */}
       <View style={styles.appbar}>
-        <Text style={styles.appbarTitle}>Registrar Venta</Text>
+        <Text style={styles.appbarTitle}>Modificar Venta</Text>
         <Image source={require("../../../assets/logo.png")} style={styles.appbarLogo} />
       </View>
 
-      {/* Card de formulario */}
-      <View style={styles.formCard}>
-        {/* Producto */}
-        <Text style={styles.fieldLabel}>Producto</Text>
-        <Pressable style={styles.select} onPress={() => setShowProducts(true)}>
-          <Text style={styles.selectText}>{product?.name || "Selecciona producto"}</Text>
-          <MaterialIcons name="keyboard-arrow-down" size={22} color="#111827" />
-        </Pressable>
+      {/* Banner ventana de edición */}
+      {locked ? (
+        <View style={[styles.lockBanner, { backgroundColor: "#fee2e2", borderColor: "#fecaca" }]}>
+          <Text style={{ color: "#991b1b", fontWeight: "700" }}>
+            {lockReason === "cancelled"
+              ? "Venta cancelada: no se puede editar."
+              : `Edición deshabilitada: han pasado más de ${EDIT_WINDOW_MIN} min desde la venta.`}
+          </Text>
+        </View>
+      ) : (
+        <View style={[styles.lockBanner, { backgroundColor: "#ecfeff", borderColor: "#a5f3fc" }]}>
+          <Text style={{ color: "#155e75" }}>
+            Tiempo restante para editar: <Text style={{ fontWeight: "700" }}>{mmss(secsLeft)}</Text>
+          </Text>
+        </View>
+      )}
 
-        {/* Cantidad */}
+      {/* ID Box */}
+      <View style={styles.idBox}>
+        <Text style={styles.idLabel}>ID Venta</Text>
+        <Text style={styles.idValue}>
+          {sale ? (sale.code ?? toId(sale._id ?? sale.id ?? sale.sale_id)) : ""}
+        </Text>
+      </View>
+
+      {/* Form */}
+      <View style={styles.formCard}>
+        <Text style={styles.fieldLabel}>Producto</Text>
+        <TouchableOpacity
+          style={[styles.select, locked && { opacity: 0.6 }]}
+          onPress={() => !locked && setShowProducts(true)}
+          disabled={locked}
+        >
+          <Text style={styles.selectText}>{(product && product.name) || "Selecciona producto"}</Text>
+          <MaterialIcons name="keyboard-arrow-down" size={22} color="#111827" />
+        </TouchableOpacity>
+
         <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Cantidad</Text>
-        <View style={styles.qtyBox}>
+        <View style={[styles.qtyBox, locked && { opacity: 0.6 }]}>
           <TextInput
             keyboardType="number-pad"
             value={String(qty)}
             onChangeText={onChangeQty}
             placeholder="Ingresa cantidad"
             style={styles.qtyInput}
+            editable={!locked}
           />
           <View style={styles.qtyButtons}>
-            <TouchableOpacity onPress={dec} style={styles.qtyBtn}>
-              <Text>-</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={inc} style={styles.qtyBtn}>
-              <Text>＋</Text>
-            </TouchableOpacity>
+            <TouchableOpacity onPress={dec} style={styles.qtyBtn} disabled={locked}><Text>−</Text></TouchableOpacity>
+            <TouchableOpacity onPress={inc} style={styles.qtyBtn} disabled={locked}><Text>＋</Text></TouchableOpacity>
           </View>
         </View>
 
-        {/* Método de pago */}
         <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Método de Pago</Text>
-        <Pressable style={styles.select} onPress={() => setShowMethods(true)}>
-          <Text style={styles.selectText}>{method?.label || "Selecciona método"}</Text>
+        <TouchableOpacity
+          style={[styles.select, locked && { opacity: 0.6 }]}
+          onPress={() => !locked && setShowMethods(true)}
+          disabled={locked}
+        >
+          <Text style={styles.selectText}>{(method && method.label) || "Selecciona método"}</Text>
           <MaterialIcons name="keyboard-arrow-down" size={22} color="#111827" />
-        </Pressable>
+        </TouchableOpacity>
       </View>
 
       {/* Totales */}
       <View style={styles.totalsCard}>
-        <View style={styles.totRow}>
-          <Text style={styles.totLabel}>Subtotal</Text>
-          <Text style={styles.totValue}>${subtotal.toFixed(2)}</Text>
-        </View>
-        <View style={styles.totRow}>
-          <Text style={styles.totLabel}>IVA</Text>
-          <Text style={styles.totValue}>{tax.toFixed(2)}</Text>
-        </View>
-        <View style={[styles.totRow, { marginTop: 8 }]}>
-          <Text style={[styles.totLabel, { fontWeight: "700" }]}>Total</Text>
-          <Text style={[styles.totValue, { fontWeight: "700" }]}>${total.toFixed(2)}</Text>
-        </View>
+        <View style={styles.totRow}><Text style={styles.totLabel}>Subtotal</Text><Text style={styles.totValue}>${subtotal.toFixed(2)}</Text></View>
+        <View style={styles.totRow}><Text style={styles.totLabel}>IVA</Text><Text style={styles.totValue}>{tax.toFixed(2)}</Text></View>
+        <View style={[styles.totRow, { marginTop: 8 }]}><Text style={[styles.totLabel, { fontWeight: "700" }]}>Total</Text><Text style={[styles.totValue, { fontWeight: "700" }]}>${total.toFixed(2)}</Text></View>
       </View>
 
       {/* Botones */}
       <View style={styles.btnRow}>
-        <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={onConfirm}>
-          <Text style={styles.btnPrimaryTxt}>Confirmar</Text>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnPrimary, locked && { opacity: 0.5 }]}
+          onPress={onSave}
+          disabled={locked}
+        >
+          <Text style={styles.btnPrimaryTxt}>Guardar</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={onCancel}>
-          <Text style={styles.btnGhostTxt}>Cancelar</Text>
+
+        <TouchableOpacity
+          style={[styles.btn, styles.btnGhost]}
+          onPress={() => {
+            if (navigation && navigation.canGoBack && navigation.canGoBack()) navigation.goBack();
+            else Alert.alert("Demo", "Sin navegación");
+          }}
+        >
+          <Text style={styles.btnGhostTxt}>Salir</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Modal: Productos */}
+      {/* Botón cancelar venta (solo visible si NO está ya cancelada) */}
+      {!isCancelled && (
+        <View style={{ marginHorizontal: 16, marginTop: 8 }}>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnDanger]}
+            onPress={() => setShowCancelModal(true)}
+            disabled={locked && lockReason !== "time" ? true : false}
+          >
+            <Text style={styles.btnDangerTxt}>Cancelar venta</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Modal productos */}
       <Modal visible={showProducts} animationType="slide" transparent>
         <View style={styles.modalWrap}>
           <View style={styles.modalCard}>
@@ -230,7 +441,7 @@ export default function RegisterSale() {
             </View>
             <FlatList
               data={listForModal}
-              keyExtractor={(p, i) => p._id || String(i)}
+              keyExtractor={(p, i) => p._id || `x-${i}`}
               style={{ maxHeight: 320 }}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.itemRow} onPress={() => chooseProduct(item)}>
@@ -249,13 +460,13 @@ export default function RegisterSale() {
         </View>
       </Modal>
 
-      {/* Modal: Métodos */}
+      {/* Modal métodos */}
       <Modal visible={showMethods} animationType="slide" transparent>
         <View style={styles.modalWrap}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Método de pago</Text>
             {METHODS.map((m) => (
-              <TouchableOpacity id={m.id} style={styles.itemRow} onPress={() => chooseMethod(m)}>
+              <TouchableOpacity key={m.id} style={styles.itemRow} onPress={() => chooseMethod(m)}>
                 <Text>{m.label}</Text>
               </TouchableOpacity>
             ))}
@@ -268,16 +479,37 @@ export default function RegisterSale() {
           </View>
         </View>
       </Modal>
+
+      {/* Modal cancelar venta */}
+      <Modal visible={showCancelModal} animationType="fade" transparent>
+        <View style={styles.modalWrap}>
+          <View style={styles.confirmCard}>
+            <View style={styles.confirmHeader}>
+              <TouchableOpacity onPress={() => setShowCancelModal(false)} style={styles.closeX}>
+                <Text style={{ fontSize: 16 }}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.confirmMsg}>
+              Esta acción marcará la venta como <Text style={{ fontWeight: "700" }}>Cancelada</Text>.
+            </Text>
+            <Text style={styles.confirmMsg}>¿Deseas continuar?</Text>
+            <View style={styles.confirmRow}>
+              <TouchableOpacity onPress={confirmCancel} style={[styles.modalBtn, { backgroundColor: "#111" }]}>
+                <Text style={{ color: "#fff", fontWeight: "700" }}>Aceptar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
+// ===== estilos =====
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#fff" },
-
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
-  // AppBar
   appbar: {
     height: 56, backgroundColor: "#e5e7eb",
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -286,12 +518,30 @@ const styles = StyleSheet.create({
   appbarTitle: { fontSize: 18, fontWeight: "700", color: "#111827" },
   appbarLogo: { width: 28, height: 28, resizeMode: "contain" },
 
-  // Card formulario
+  lockBanner: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+
+  idBox: {
+    marginHorizontal: 16, marginTop: 10, marginBottom: 8,
+    backgroundColor: "#fff", borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14,
+    borderWidth: 1, borderColor: "#d1d5db",
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  idLabel: { color: "#111827", fontWeight: "700" },
+  idValue: { color: "#111827", fontWeight: "700" },
+
   formCard: {
     margin: 16, padding: 14, borderRadius: 14, backgroundColor: "#fff",
     borderWidth: 1, borderColor: "#d1d5db",
-    shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 }, elevation: 2,
+    shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
   fieldLabel: { fontWeight: "700", color: "#111827", marginBottom: 8 },
 
@@ -314,19 +564,16 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#e5e7eb", marginLeft: 8,
   },
 
-  // Totales
   totalsCard: {
     marginHorizontal: 16, marginTop: 6, marginBottom: 8,
     backgroundColor: "#fff", borderRadius: 14, padding: 14,
     borderWidth: 1, borderColor: "#d1d5db",
-    shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 }, elevation: 2,
+    shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
   totRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
   totLabel: { color: "#111827" },
   totValue: { color: "#111827" },
 
-  // Botones
   btnRow: { flexDirection: "row", gap: 12, marginHorizontal: 16, marginTop: 6 },
   btn: { flex: 1, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   btnPrimary: { backgroundColor: "#111" },
@@ -334,14 +581,26 @@ const styles = StyleSheet.create({
   btnGhost: { backgroundColor: "#9ca3af" },
   btnGhostTxt: { color: "#fff", fontWeight: "700" },
 
-  // Modales
+  btnDanger: {
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ef4444",
+  },
+  btnDangerTxt: { color: "#fff", fontWeight: "700" },
+
   modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", padding: 18 },
   modalCard: { backgroundColor: "#fff", borderRadius: 14, padding: 14 },
   modalTitle: { fontWeight: "700", fontSize: 16, marginBottom: 10 },
   modalBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
-  searchBox: {
-    borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10,
-    paddingHorizontal: 10, marginBottom: 10, height: 42, justifyContent: "center",
-  },
+  searchBox: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, paddingHorizontal: 10, marginBottom: 10, height: 42, justifyContent: "center" },
   itemRow: { paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e5e7eb" },
+
+  // confirm cancel
+  confirmCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16 },
+  confirmHeader: { alignItems: "flex-end" },
+  closeX: { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
+  confirmMsg: { color: "#111827", marginTop: 6 },
+  confirmRow: { marginTop: 14, flexDirection: "row", justifyContent: "flex-end" },
 });

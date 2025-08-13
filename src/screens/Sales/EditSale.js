@@ -43,12 +43,31 @@ const METHODS = [
   { id: "transfer", label: "Transferencia" },
 ];
 
+// === helpers tiempo edición ===
+const EDIT_WINDOW_MIN = 10;
+
+const parseDate = (v) => {
+  if (!v) return null;
+  // intenta varias formas comunes
+  const s = (typeof v === "string")
+    ? v
+    : (v?.date || v?.$date || v?.iso || v);
+  const d = new Date(s);
+  return isNaN(+d) ? null : d;
+};
+
+const secondsLeftFrom = (createdAt) => {
+  if (!createdAt) return 0;
+  const deadline = new Date(createdAt.getTime() + EDIT_WINDOW_MIN * 60 * 1000);
+  return Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000));
+};
+
 export default function EditSale() {
   const navigation = useNavigation();
   const route = useRoute();
   const { saleId } = route.params || {};
 
-  // ✅ 1) estado loading declarado
+  // estado loading
   const [loading, setLoading] = useState(true);
 
   // datos base
@@ -65,11 +84,20 @@ export default function EditSale() {
   const [showMethods, setShowMethods] = useState(false);
   const [method, setMethod] = useState(null);
 
+  // ventana de edición
+  const [locked, setLocked] = useState(false);
+  const [secsLeft, setSecsLeft] = useState(0); // cuenta regresiva
+
   // ----- cargar productos (devuelve la lista también) -----
   const loadProducts = useCallback(async () => {
     const res = await API.get(`/products/names`);
     const rows = Array.isArray(res.data) ? res.data : (res.data && res.data.data) ? res.data.data : [];
-    const mapped = rows.map((p) => ({ _id: toId(p.id), name: String(p.name || "Unnamed"), price: p.price, sale_price: p.sale_price }));
+    const mapped = rows.map((p) => ({
+      _id: toId(p.id),
+      name: String(p.name || "Unnamed"),
+      price: Number(p.price ?? 0),
+      sale_price: Number(p.sale_price ?? 0)
+    }));
     setProducts(mapped);
     return mapped; // <- devolver para usar inmediatamente
   }, []);
@@ -88,30 +116,37 @@ export default function EditSale() {
     const doc = res.data && res.data.data ? res.data.data : res.data;
     setSale(doc);
 
+    // ⏱️ ventana de edición
+    const createdAt =
+      parseDate(doc.created_at) ||
+      parseDate(doc.createdAt) ||
+      parseDate(doc.created_at_iso) ||
+      parseDate(doc.createdAtIso);
+    const left = secondsLeftFrom(createdAt);
+    setSecsLeft(left);
+    setLocked(left === 0);
+
+    // método y cantidad
     const det = normalizeDetails(doc.details)[0] || {};
-
-    // método
-    const m = METHODS.find((x) => x.id=== doc.payment_method) || null;
+    const m = METHODS.find((x) => x.id === doc.payment_method) || null;
     setMethod(m);
-
-    // cantidad
     setQty(Number(det.quantity || 1));
 
     return String(det.product_id || "");
   }, []);
 
+  // carga inicial
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
-        // ✅ 2) usar saleId real, NO propSaleId
         const id = saleId || (await fetchAnySaleId());
         // cargamos en paralelo
         const [prodList, pid] = await Promise.all([
           loadProducts(),
           (async () => await loadSale(id))(),
         ]);
-        // ✅ 3) seleccionar producto usando la lista *devuelta* (no el estado)
+        // seleccionar producto usando la lista *devuelta* (no el estado)
         if (pid) {
           const found = prodList.find((p) => p._id === pid);
           if (found) setProduct(found);
@@ -134,8 +169,25 @@ export default function EditSale() {
     if (found) setProduct(found);
   }, [products, sale, product]);
 
+  // cuenta regresiva
+  useEffect(() => {
+    if (!sale) return;
+    if (locked || secsLeft === 0) return;
+    const int = setInterval(() => {
+      setSecsLeft((s) => {
+        const ns = Math.max(0, s - 1);
+        if (ns === 0) setLocked(true);
+        return ns;
+      });
+    }, 1000);
+    return () => clearInterval(int);
+  }, [sale, locked, secsLeft]);
+
   // ----- totales -----
-  const unitPrice = useMemo(() => Number((product && (product.sale_price || product.price)) || 0), [product]);
+  const unitPrice = useMemo(
+    () => Number((product && (product.sale_price || product.price)) || 0),
+    [product]
+  );
   const subtotal = useMemo(() => +(unitPrice * qty).toFixed(2), [unitPrice, qty]);
   const tax = useMemo(() => +(subtotal * 0.16).toFixed(2), [subtotal]);
   const total = useMemo(() => +(subtotal + tax).toFixed(2), [subtotal, tax]);
@@ -146,20 +198,30 @@ export default function EditSale() {
     return q ? products.filter((p) => (p.name || "").toLowerCase().includes(q)) : products;
   }, [products, prodSearch]);
 
-  const chooseProduct = (p) => { setProduct(p); setShowProducts(false); };
-  const chooseMethod = (m) => { setMethod(m); setShowMethods(false); };
+  const chooseProduct = (p) => { if (!locked) { setProduct(p); setShowProducts(false); } };
+  const chooseMethod  = (m) => { if (!locked) { setMethod(m); setShowMethods(false); } };
 
   // ----- inputs cantidad -----
-  const inc = () => setQty((q) => Math.min(9999, q + 1));
-  const dec = () => setQty((q) => Math.max(1, q - 1));
+  const inc = () => !locked && setQty((q) => Math.min(9999, q + 1));
+  const dec = () => !locked && setQty((q) => Math.max(1, q - 1));
   const onChangeQty = (v) => {
+    if (locked) return;
     const n = Number((v || "").replace(/[^\d]/g, ""));
     setQty(!n || n <= 0 ? 1 : n);
+  };
+
+  const mmss = (s) => {
+    const m = Math.floor(s / 60).toString().padStart(2, "0");
+    const ss = (s % 60).toString().padStart(2, "0");
+    return `${m}:${ss}`;
   };
 
   // ----- guardar -----
   const onSave = async () => {
     if (!sale) return;
+    if (locked) {
+      return Alert.alert("Bloqueado", `Solo puedes editar durante ${EDIT_WINDOW_MIN} minutos después de crear la venta.`);
+    }
     if (!product) return Alert.alert("Falta", "Selecciona un producto.");
     if (!method) return Alert.alert("Falta", "Selecciona un método de pago.");
 
@@ -172,8 +234,24 @@ export default function EditSale() {
       Alert.alert("Guardado", "Venta actualizada.");
       if (navigation && navigation.canGoBack && navigation.canGoBack()) navigation.goBack();
     } catch (e) {
-      console.log("update sale error:", e?.response?.data || e?.message);
-      Alert.alert("Error", e?.response?.data?.message || "No se pudo actualizar la venta");
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        "No se pudo actualizar la venta";
+
+      // Si el backend ya valida el tiempo y devuelve 403/422, lo mostramos claro.
+      if (e?.response?.status === 403 || e?.response?.status === 422) {
+        Alert.alert(
+          "No permitido",
+          msg.toLowerCase().includes("tiempo") || msg.toLowerCase().includes("time")
+            ? msg
+            : `La edición está limitada a ${EDIT_WINDOW_MIN} minutos después de la venta.`
+        );
+        setLocked(true);
+      } else {
+        Alert.alert("Error", msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -195,39 +273,63 @@ export default function EditSale() {
         <Image source={require("../../../assets/logo.png")} style={styles.appbarLogo} />
       </View>
 
+      {/* Banner ventana de edición */}
+      {locked ? (
+        <View style={[styles.lockBanner, { backgroundColor: "#fee2e2", borderColor: "#fecaca" }]}>
+          <Text style={{ color: "#991b1b", fontWeight: "700" }}>
+            Edición deshabilitada: han pasado más de {EDIT_WINDOW_MIN} min desde la venta.
+          </Text>
+        </View>
+      ) : (
+        <View style={[styles.lockBanner, { backgroundColor: "#ecfeff", borderColor: "#a5f3fc" }]}>
+          <Text style={{ color: "#155e75" }}>
+            Tiempo restante para editar: <Text style={{ fontWeight: "700" }}>{mmss(secsLeft)}</Text>
+          </Text>
+        </View>
+      )}
+
       {/* ID Box */}
       <View style={styles.idBox}>
         <Text style={styles.idLabel}>ID Venta</Text>
         <Text style={styles.idValue}>
-            {sale ? (sale.code ?? toId(sale._id ?? sale.id ?? sale.sale_id)) : ""}
+          {sale ? (sale.code ?? toId(sale._id ?? sale.id ?? sale.sale_id)) : ""}
         </Text>
-        </View>
+      </View>
 
       {/* Form */}
       <View style={styles.formCard}>
         <Text style={styles.fieldLabel}>Producto</Text>
-        <TouchableOpacity style={styles.select} onPress={() => setShowProducts(true)}>
+        <TouchableOpacity
+          style={[styles.select, locked && { opacity: 0.6 }]}
+          onPress={() => !locked && setShowProducts(true)}
+          disabled={locked}
+        >
           <Text style={styles.selectText}>{(product && product.name) || "Selecciona producto"}</Text>
           <MaterialIcons name="keyboard-arrow-down" size={22} color="#111827" />
         </TouchableOpacity>
 
         <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Cantidad</Text>
-        <View style={styles.qtyBox}>
+        <View style={[styles.qtyBox, locked && { opacity: 0.6 }]}>
           <TextInput
             keyboardType="number-pad"
             value={String(qty)}
             onChangeText={onChangeQty}
             placeholder="Ingresa cantidad"
             style={styles.qtyInput}
+            editable={!locked}
           />
           <View style={styles.qtyButtons}>
-            <TouchableOpacity onPress={dec} style={styles.qtyBtn}><Text>−</Text></TouchableOpacity>
-            <TouchableOpacity onPress={inc} style={styles.qtyBtn}><Text>＋</Text></TouchableOpacity>
+            <TouchableOpacity onPress={dec} style={styles.qtyBtn} disabled={locked}><Text>−</Text></TouchableOpacity>
+            <TouchableOpacity onPress={inc} style={styles.qtyBtn} disabled={locked}><Text>＋</Text></TouchableOpacity>
           </View>
         </View>
 
         <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Método de Pago</Text>
-        <TouchableOpacity style={styles.select} onPress={() => setShowMethods(true)}>
+        <TouchableOpacity
+          style={[styles.select, locked && { opacity: 0.6 }]}
+          onPress={() => !locked && setShowMethods(true)}
+          disabled={locked}
+        >
           <Text style={styles.selectText}>{(method && method.label) || "Selecciona método"}</Text>
           <MaterialIcons name="keyboard-arrow-down" size={22} color="#111827" />
         </TouchableOpacity>
@@ -242,7 +344,11 @@ export default function EditSale() {
 
       {/* Botones */}
       <View style={styles.btnRow}>
-        <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={onSave}>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnPrimary, locked && { opacity: 0.5 }]}
+          onPress={onSave}
+          disabled={locked}
+        >
           <Text style={styles.btnPrimaryTxt}>Guardar</Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -281,7 +387,10 @@ export default function EditSale() {
               )}
               ListEmptyComponent={<Text style={{ textAlign: "center", color: "#666" }}>Sin productos</Text>}
             />
-            <TouchableOpacity style={[styles.modalBtn, { backgroundColor: "#111", alignSelf: "flex-end" }]} onPress={() => setShowProducts(false)}>
+            <TouchableOpacity
+              style={[styles.modalBtn, { backgroundColor: "#111", alignSelf: "flex-end" }]}
+              onPress={() => setShowProducts(false)}
+            >
               <Text style={{ color: "#fff" }}>Cerrar</Text>
             </TouchableOpacity>
           </View>
@@ -294,11 +403,14 @@ export default function EditSale() {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Método de pago</Text>
             {METHODS.map((m) => (
-              <TouchableOpacity id={m.id} style={styles.itemRow} onPress={() => chooseMethod(m)}>
+              <TouchableOpacity key={m.id} style={styles.itemRow} onPress={() => chooseMethod(m)}>
                 <Text>{m.label}</Text>
               </TouchableOpacity>
             ))}
-            <TouchableOpacity style={[styles.modalBtn, { backgroundColor: "#111", alignSelf: "flex-end" }]} onPress={() => setShowMethods(false)}>
+            <TouchableOpacity
+              style={[styles.modalBtn, { backgroundColor: "#111", alignSelf: "flex-end" }]}
+              onPress={() => setShowMethods(false)}
+            >
               <Text style={{ color: "#fff" }}>Cerrar</Text>
             </TouchableOpacity>
           </View>
@@ -320,6 +432,16 @@ const styles = StyleSheet.create({
   },
   appbarTitle: { fontSize: 18, fontWeight: "700", color: "#111827" },
   appbarLogo: { width: 28, height: 28, resizeMode: "contain" },
+
+  lockBanner: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
 
   idBox: {
     marginHorizontal: 16, marginTop: 10, marginBottom: 8,

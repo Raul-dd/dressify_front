@@ -18,7 +18,7 @@ export default function App() {
 }
 */
 
-//Prueba
+//Prueba de Ventas
 // App.js
 import 'react-native-gesture-handler';
 import React from 'react';
